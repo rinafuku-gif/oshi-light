@@ -98,8 +98,7 @@ export function POVMode({
   const debugCountRef = useRef(0);
 
   // ---- 帯のパラメータ ----
-  const BAND_WIDTH = 120;   // 帯の幅 (px, CSS)
-  const DISPLAY_COLS = 40;  // 帯内の横方向グリッド数
+  // 画面全幅を使用
   const HEIGHT_ROWS = 50;   // 縦方向グリッド数
   const SPEED_FACTOR = 150; // 加速度→速度変換係数
 
@@ -203,14 +202,25 @@ export function POVMode({
 
       const offset = offsetRef.current;
 
+      const canvasW = canvas.width;
+      const canvasH = canvas.height;
+
       // ---- 輝度計算 ----
       const isSwinging = isSwingingRef.current;
       const absVel = Math.abs(velocityRef.current);
-      const brightness = isSwinging
-        ? Math.min(1, 0.4 + absVel * 0.02)
-        : 0.08;
+      // 止まっている時は完全に黒、振っている時だけ表示
+      if (!isSwinging) {
+        ctx.fillStyle = "#000000";
+        ctx.fillRect(0, 0, canvasW, canvasH);
+        rafRef.current = requestAnimationFrame(loop);
+        debugCountRef.current++;
+        if (debugCountRef.current % 10 === 0) {
+          setDebug({ x: Math.round(prevAccRef.current * 100) / 100, vel: Math.round(velocityRef.current * 10) / 10, col: Math.floor(offset) });
+        }
+        return;
+      }
+      const brightness = Math.min(1, 0.4 + absVel * 0.02);
 
-      // onColor 計算
       let onColor: string;
       if (brightness >= 1) {
         onColor = textColor;
@@ -223,9 +233,9 @@ export function POVMode({
       }
 
       const dpr = window.devicePixelRatio || 1;
-      const canvasW = canvas.width;   // 物理ピクセル
-      const canvasH = canvas.height;  // 物理ピクセル
 
+      // 画面全幅を使う。ドットの幅はビットマップ列数から算出
+      const DISPLAY_COLS = Math.min(totalCols, Math.floor(canvasW / 3)); // 最低3px幅のドット
       const cellW = canvasW / DISPLAY_COLS;
       const cellH = canvasH / HEIGHT_ROWS;
 
@@ -287,9 +297,9 @@ export function POVMode({
       const canvas = canvasRef.current;
       if (!canvas) return;
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = BAND_WIDTH * dpr;
+      canvas.width = window.innerWidth * dpr;
       canvas.height = window.innerHeight * dpr;
-      canvas.style.width = `${BAND_WIDTH}px`;
+      canvas.style.width = `${window.innerWidth}px`;
       canvas.style.height = `${window.innerHeight}px`;
     };
 
@@ -379,14 +389,15 @@ export function POVMode({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Canvas帯: 画面中央に幅120px、高さ100vh */}
+      {/* Canvas: 画面全体に表示 */}
       <canvas
         ref={canvasRef}
         style={{
           position: "absolute",
           top: 0,
-          left: "50%",
-          transform: "translateX(-50%)",
+          left: 0,
+          width: "100%",
+          height: "100%",
           display: "block",
           imageRendering: "pixelated",
         }}
