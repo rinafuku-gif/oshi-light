@@ -13,7 +13,7 @@ interface POVModeProps {
 // ============================================================
 // テキストをビットマップ列配列に変換（初回1回だけ実行）
 // columns[x][y] = true/false
-// heightRows: 縦方向の解像度（40〜60行推奨）
+// heightRows: 縦方向の解像度（50行）
 // ============================================================
 function textToBitmap(text: string, heightRows: number): boolean[][] {
   const displayText = text || "推し活ライト";
@@ -27,8 +27,8 @@ function textToBitmap(text: string, heightRows: number): boolean[][] {
 
   const metrics = ctx.measureText(displayText);
   const textWidth = Math.ceil(metrics.width);
-  // 前後に10%パディング（ループ境界の視覚的なクッション）
-  const padding = Math.ceil(textWidth * 0.1);
+  // 左右に20%パディング
+  const padding = Math.ceil(textWidth * 0.2);
 
   const canvasWidth = textWidth + padding * 2;
   const canvasHeight = heightRows;
@@ -61,7 +61,8 @@ function textToBitmap(text: string, heightRows: number): boolean[][] {
 }
 
 // ============================================================
-// POVMode 本体
+// POVMode 本体 — 真バーサライト方式
+// 毎フレーム: 半透明黒オーバーレイ + 現在列1本だけ描画
 // ============================================================
 export function POVMode({
   text,
@@ -90,17 +91,16 @@ export function POVMode({
   // ---- タッチスワイプ ----
   const touchPrevXRef = useRef<number | null>(null);
 
-  // ---- Canvas 帯 ----
+  // ---- Canvas ----
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // ---- デバッグ（10フレームに1回だけsetState） ----
   const [debug, setDebug] = useState({ x: 0, vel: 0, col: 0 });
   const debugCountRef = useRef(0);
 
-  // ---- 帯のパラメータ ----
-  // 画面全幅を使用
-  const HEIGHT_ROWS = 50;   // 縦方向グリッド数
-  const SPEED_FACTOR = 150; // 加速度→速度変換係数
+  // ---- パラメータ ----
+  const HEIGHT_ROWS = 50;
+  const SPEED_FACTOR = 200;
 
   // ============================================================
   // ビットマップ生成
@@ -171,7 +171,7 @@ export function POVMode({
   }, []);
 
   // ============================================================
-  // rAFループ — Canvas帯方式
+  // rAFループ — 真バーサライト方式
   // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
@@ -196,81 +196,64 @@ export function POVMode({
         return;
       }
 
-      // ---- オフセット更新（列単位） ----
-      offsetRef.current += velocityRef.current * (dt / 1000);
-      offsetRef.current = ((offsetRef.current % totalCols) + totalCols) % totalCols;
-
-      const offset = offsetRef.current;
-
       const canvasW = canvas.width;
       const canvasH = canvas.height;
-
-      // ---- 輝度計算 ----
       const isSwinging = isSwingingRef.current;
-      const absVel = Math.abs(velocityRef.current);
-      // 止まっている時は完全に黒、振っている時だけ表示
-      if (!isSwinging) {
-        ctx.fillStyle = "#000000";
-        ctx.fillRect(0, 0, canvasW, canvasH);
-        rafRef.current = requestAnimationFrame(loop);
-        debugCountRef.current++;
-        if (debugCountRef.current % 10 === 0) {
-          setDebug({ x: Math.round(prevAccRef.current * 100) / 100, vel: Math.round(velocityRef.current * 10) / 10, col: Math.floor(offset) });
-        }
-        return;
-      }
-      const brightness = Math.min(1, 0.4 + absVel * 0.02);
 
-      let onColor: string;
-      if (brightness >= 1) {
-        onColor = textColor;
-      } else {
-        const hex = textColor.replace("#", "");
-        const r = Math.round(parseInt(hex.slice(0, 2), 16) * brightness);
-        const g = Math.round(parseInt(hex.slice(2, 4), 16) * brightness);
-        const b = Math.round(parseInt(hex.slice(4, 6), 16) * brightness);
-        onColor = `rgb(${r},${g},${b})`;
-      }
-
-      const dpr = window.devicePixelRatio || 1;
-
-      // 画面全幅を使う。ドットの幅はビットマップ列数から算出
-      const DISPLAY_COLS = Math.min(totalCols, Math.floor(canvasW / 3)); // 最低3px幅のドット
-      const cellW = canvasW / DISPLAY_COLS;
-      const cellH = canvasH / HEIGHT_ROWS;
-
-      // ---- 背景クリア ----
-      ctx.fillStyle = "#000000";
+      // ---- 毎フレーム: 半透明黒オーバーレイでフェードアウト ----
+      // isSwinging中も停止中も常にオーバーレイをかける
+      // → 停止するとすぐ黒になり、振ると残像が尾を引く
+      ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
       ctx.fillRect(0, 0, canvasW, canvasH);
 
-      // ---- ドットマトリクス描画 ----
-      ctx.fillStyle = onColor;
-      for (let dx = 0; dx < DISPLAY_COLS; dx++) {
-        const bitmapX = (Math.floor(offset) + dx) % totalCols;
-        const col = bitmap[bitmapX];
-        if (!col) continue;
-        for (let y = 0; y < HEIGHT_ROWS; y++) {
-          if (col[y]) {
-            // セル間に1物理pxの隙間を開けることでドットらしく見せる
-            const gap = Math.max(1, Math.floor(dpr));
-            ctx.fillRect(
-              dx * cellW + gap,
-              y * cellH + gap,
-              Math.max(1, cellW - gap),
-              Math.max(1, cellH - gap)
-            );
-          }
-        }
-      }
+      if (isSwinging) {
+        // ---- オフセット更新（列単位） ----
+        offsetRef.current += velocityRef.current * (dt / 1000);
+        offsetRef.current = ((offsetRef.current % totalCols) + totalCols) % totalCols;
 
-      // ---- デバッグ更新（10フレームに1回） ----
-      debugCountRef.current++;
-      if (debugCountRef.current % 10 === 0) {
-        setDebug({
-          x: Math.round(prevAccRef.current * 100) / 100,
-          vel: Math.round(velocityRef.current * 10) / 10,
-          col: Math.floor(offset),
-        });
+        const offset = offsetRef.current;
+
+        // ---- 現在列のX位置を計算 ----
+        const currentCol = Math.floor(offset) % totalCols;
+        const screenX = (currentCol / totalCols) * canvasW;
+        const lineWidth = Math.max(3, canvasW / totalCols);
+        const cellH = canvasH / HEIGHT_ROWS;
+
+        // ---- 現在列のONピクセルだけを縦ラインとして描画 ----
+        const col = bitmap[currentCol];
+        if (col) {
+          ctx.fillStyle = textColor;
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = textColor;
+
+          for (let y = 0; y < HEIGHT_ROWS; y++) {
+            if (col[y]) {
+              ctx.fillRect(screenX, y * cellH, lineWidth, cellH);
+            }
+          }
+
+          ctx.shadowBlur = 0;
+        }
+
+        // ---- デバッグ更新（10フレームに1回） ----
+        debugCountRef.current++;
+        if (debugCountRef.current % 10 === 0) {
+          setDebug({
+            x: Math.round(prevAccRef.current * 100) / 100,
+            vel: Math.round(velocityRef.current * 10) / 10,
+            col: currentCol,
+          });
+        }
+      } else {
+        // 振っていない: オーバーレイのみで自然にフェードアウト
+        debugCountRef.current++;
+        if (debugCountRef.current % 10 === 0) {
+          setDebug({
+            x: Math.round(prevAccRef.current * 100) / 100,
+            vel: Math.round(velocityRef.current * 10) / 10,
+            col: Math.floor(offsetRef.current),
+          });
+        }
       }
 
       rafRef.current = requestAnimationFrame(loop);
@@ -380,7 +363,7 @@ export function POVMode({
   }
 
   // ============================================================
-  // granted — Canvas帯方式POVモード
+  // granted — 真バーサライト方式POVモード
   // ============================================================
   return (
     <div
