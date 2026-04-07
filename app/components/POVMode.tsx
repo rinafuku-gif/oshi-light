@@ -13,8 +13,6 @@ interface POVModeProps {
 // ---- 定数（モジュールスコープ） ----
 const BITMAP_HEIGHT = 48;
 const SWING_THRESHOLD = 2.0;   // この加速度(m/s²)を超えたらスイング開始
-const COL_ADVANCE_SCALE = 10;  // absAcc * このスケールで列進行速度(列/フレーム)
-const FADE_ALPHA = 0.07;       // フェード速度（小さいほど残像が長い）
 
 // ============================================================
 // テキストをビットマップ列配列に変換
@@ -91,8 +89,6 @@ export function POVMode({
 
   const positionRef = useRef(0);
   const prevAccSignRef = useRef(0); // 前フレームの加速度の符号（+1 / -1 / 0）
-  const accelerationRef = useRef(acceleration); // rAFループ内で最新値を参照するためのref
-
   const isSwingingRef = useRef(false);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -122,12 +118,9 @@ export function POVMode({
     }
   }, [buildBitmap, permissionState]);
 
-  // acceleration が変化するたびに ref を同期
-  accelerationRef.current = acceleration;
-
   // ============================================================
   // 加速度センサー入力
-  // acceleration.x の符号変化（スイング方向の反転）を検出して列をリセット
+  // スイング中は毎フレーム列を進める。符号反転でcolIndexリセット。
   // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
@@ -145,6 +138,13 @@ export function POVMode({
         positionRef.current = 0;
       }
 
+      // 加速度に応じて列を進める: advance = max(1, floor(absAcc * 0.5))
+      const advance = Math.max(1, Math.floor(absAcc * 0.5));
+      const totalCols = totalColsRef.current;
+      if (totalCols > 0) {
+        positionRef.current = (positionRef.current + advance) % totalCols;
+      }
+
       isSwingingRef.current = true;
       if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
       stopTimerRef.current = setTimeout(() => {
@@ -159,6 +159,7 @@ export function POVMode({
 
   // ============================================================
   // タッチスワイプ（テスト用）
+  // deltaXが3px以上で1列進める。方向が変わったらcolIndex = 0にリセット
   // ============================================================
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     touchPrevXRef.current = e.touches[0].clientX;
@@ -171,9 +172,23 @@ export function POVMode({
     if (touchPrevXRef.current === null) return;
     const currentX = e.touches[0].clientX;
     const deltaX = currentX - touchPrevXRef.current;
-    touchPrevXRef.current = currentX;
 
-    touchVelRef.current = deltaX * 3;
+    if (Math.abs(deltaX) >= 3) {
+      const newSign = deltaX > 0 ? 1 : -1;
+      // 方向が反転したらリセット
+      if (touchVelRef.current !== 0 && newSign !== touchVelRef.current) {
+        positionRef.current = 0;
+      }
+      touchVelRef.current = newSign;
+
+      const totalCols = totalColsRef.current;
+      if (totalCols > 0) {
+        positionRef.current = (positionRef.current + 1) % totalCols;
+      }
+
+      touchPrevXRef.current = currentX;
+    }
+
     isSwingingRef.current = true;
 
     if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
@@ -188,19 +203,14 @@ export function POVMode({
   }, []);
 
   // ============================================================
-  // rAFループ — 光の軌跡方式
-  // 半透明オーバーレイでフェード + 現在列を画面上のX座標に配置
+  // rAFループ — 本物のPOV（バーサライト）方式
+  // 毎フレーム: 完全クリア → ビットマップの1列のみ画面全幅に描画
+  // 残像はユーザーの目が担当。フェードなし。
   // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
 
-    let lastTime = 0;
-
-    const loop = (now: number) => {
-      if (lastTime === 0) lastTime = now;
-      const dt = Math.min((now - lastTime) / 1000, 0.05);
-      lastTime = now;
-
+    const loop = () => {
       const bitmap = bitmapRef.current;
       const totalCols = totalColsRef.current;
       const canvas = canvasRef.current;
@@ -219,58 +229,36 @@ export function POVMode({
       const canvasW = canvas.width;
       const canvasH = canvas.height;
 
-      // ---- フェード: 半透明の黒をオーバーレイ ----
-      ctx.fillStyle = `rgba(0, 0, 0, ${FADE_ALPHA})`;
+      // ---- 毎フレーム完全クリア（フェードなし）----
+      ctx.fillStyle = "#000000";
       ctx.fillRect(0, 0, canvasW, canvasH);
 
       if (isSwingingRef.current) {
-        // ---- 位置推定 ----
-        // タッチ操作: deltaXの絶対値で列進行速度を決める
-        // センサー操作: absAcc * COL_ADVANCE_SCALE で列進行速度を決める
-        if (Math.abs(touchVelRef.current) > 0.5) {
-          positionRef.current += Math.abs(touchVelRef.current) * 0.4;
-        } else {
-          const absAcc = Math.abs(accelerationRef.current);
-          if (absAcc > SWING_THRESHOLD) {
-            positionRef.current += absAcc * COL_ADVANCE_SCALE * dt * 60;
-          }
-        }
-
-        // 位置を0〜totalCols-1にクランプ（ラップしない — 左端から右端に描く）
-        positionRef.current = Math.max(0, Math.min(positionRef.current, totalCols - 1));
-
-        const colIndex = Math.floor(positionRef.current);
+        const colIndex = positionRef.current % totalCols;
         const col = bitmap[colIndex];
 
         if (col) {
-          // ---- 列を画面上のX座標に配置 ----
-          const screenX = (colIndex / totalCols) * canvasW;
-          const colWidth = Math.max(Math.ceil(canvasW / totalCols), 2);
           const rowH = canvasH / col.length;
-
           const rgb = hexToRgb(textColorRef.current);
 
-          // グロー
+          // グロー効果
           ctx.shadowColor = textColorRef.current;
-          ctx.shadowBlur = 20;
+          ctx.shadowBlur = 30;
+          ctx.fillStyle = `rgb(${rgb})`;
 
-          // メインの色（明るめ）
-          ctx.fillStyle = `rgba(${rgb}, 0.95)`;
-
+          // ビットマップの1列を画面全幅に描画
           for (let y = 0; y < col.length; y++) {
             if (col[y]) {
-              ctx.fillRect(
-                Math.floor(screenX),
-                Math.floor(y * rowH),
-                colWidth + 1,
-                Math.ceil(rowH) + 1
-              );
+              ctx.fillRect(0, Math.floor(y * rowH), canvasW, Math.ceil(rowH));
             }
           }
 
           // グローリセット
           ctx.shadowBlur = 0;
         }
+
+        // ---- タッチ操作: deltaXが3px以上で1列進める ----
+        // (handleTouchMoveで直接advanceColを呼ぶ方式に変更)
       }
 
       // ガイド表示制御
