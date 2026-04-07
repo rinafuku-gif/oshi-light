@@ -11,9 +11,9 @@ interface POVModeProps {
 }
 
 // ============================================================
-// テキストをビットマップ列配列に変換
+// テキストをビットマップ列配列に変換（初回1回だけ実行）
 // columns[x][y] = true/false
-// heightRows: 縦方向の解像度
+// heightRows: 縦方向の解像度（40〜60行推奨）
 // ============================================================
 function textToBitmap(text: string, heightRows: number): boolean[][] {
   const displayText = text || "推し活ライト";
@@ -22,12 +22,12 @@ function textToBitmap(text: string, heightRows: number): boolean[][] {
   const ctx = canvas.getContext("2d");
   if (!ctx) return [];
 
-  const fontSize = heightRows * 0.75;
+  const fontSize = Math.floor(heightRows * 0.75);
   ctx.font = `900 ${fontSize}px system-ui, -apple-system, sans-serif`;
 
   const metrics = ctx.measureText(displayText);
   const textWidth = Math.ceil(metrics.width);
-  // 前後に10%パディング
+  // 前後に10%パディング（ループ境界の視覚的なクッション）
   const padding = Math.ceil(textWidth * 0.1);
 
   const canvasWidth = textWidth + padding * 2;
@@ -61,19 +61,6 @@ function textToBitmap(text: string, heightRows: number): boolean[][] {
 }
 
 // ============================================================
-// 16進カラーをRGB分解
-// ============================================================
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const clean = hex.replace("#", "");
-  const num = parseInt(clean, 16);
-  return {
-    r: (num >> 16) & 255,
-    g: (num >> 8) & 255,
-    b: num & 255,
-  };
-}
-
-// ============================================================
 // POVMode 本体
 // ============================================================
 export function POVMode({
@@ -83,36 +70,43 @@ export function POVMode({
   permissionState,
   onRequestPermission,
 }: POVModeProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // ---- ビットマップデータ ----
   const bitmapRef = useRef<boolean[][]>([]);
   const totalColsRef = useRef(0);
 
-  // スクロールオフセット（実数、ピクセル単位）
+  // ---- スクロールオフセット（実数、列インデックス単位） ----
   const offsetRef = useRef(0);
-  // 速度（ピクセル/秒）
   const velocityRef = useRef(0);
-  // 停止判定
   const isSwingingRef = useRef(false);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 加速度の前回値
+  // ---- 加速度の前回値 ----
   const prevAccRef = useRef(0);
 
-  // rAF
+  // ---- rAF ----
   const rafRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
 
-  // タッチスワイプ
+  // ---- タッチスワイプ ----
   const touchPrevXRef = useRef<number | null>(null);
 
-  // デバッグ表示用state（間引き更新）
-  const [debug, setDebug] = useState({ x: 0, vel: 0, offset: 0 });
+  // ---- 縦線コンテナ（DOM直接操作用） ----
+  const lineContainerRef = useRef<HTMLDivElement>(null);
+  // セルのDOM要素参照（配列）
+  const cellRefsRef = useRef<HTMLDivElement[]>([]);
+
+  // ---- デバッグ（10フレームに1回だけsetState） ----
+  const [debug, setDebug] = useState({ x: 0, vel: 0, col: 0 });
   const debugCountRef = useRef(0);
 
-  // ---- ビットマップ生成 ----
+  // ---- セル数（縦解像度） ----
+  const HEIGHT_ROWS = 50;
+
+  // ============================================================
+  // ビットマップ生成
+  // ============================================================
   const buildBitmap = useCallback(() => {
-    const heightRows = 150;
-    const cols = textToBitmap(text, heightRows);
+    const cols = textToBitmap(text, HEIGHT_ROWS);
     bitmapRef.current = cols;
     totalColsRef.current = cols.length;
     offsetRef.current = 0;
@@ -125,7 +119,37 @@ export function POVMode({
     }
   }, [buildBitmap, permissionState]);
 
-  // ---- 加速度 → velocity 変換 ----
+  // ============================================================
+  // セルのDOM構築（縦線コンテナ内に HEIGHT_ROWS 個のセルを配置）
+  // ============================================================
+  useEffect(() => {
+    if (permissionState !== "granted") return;
+
+    const container = lineContainerRef.current;
+    if (!container) return;
+
+    // 既存セルをクリア
+    container.innerHTML = "";
+    cellRefsRef.current = [];
+
+    const cellHeight = 100 / HEIGHT_ROWS;
+
+    for (let i = 0; i < HEIGHT_ROWS; i++) {
+      const cell = document.createElement("div");
+      cell.style.position = "absolute";
+      cell.style.left = "0";
+      cell.style.width = "100%";
+      cell.style.top = `${i * cellHeight}%`;
+      cell.style.height = `${cellHeight}%`;
+      cell.style.backgroundColor = "#000000";
+      container.appendChild(cell);
+      cellRefsRef.current.push(cell);
+    }
+  }, [permissionState]);
+
+  // ============================================================
+  // 加速度 → velocity 変換
+  // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
 
@@ -133,13 +157,12 @@ export function POVMode({
     const delta = raw - prevAccRef.current;
     prevAccRef.current = raw;
 
-    // 加速度の変化量でvelocityを更新
-    // delta > 0 → 右方向にスクロール、delta < 0 → 左方向
-    const SPEED_FACTOR = 80; // tuning: 大きいほど速い
+    // SPEED_FACTOR: 加速度の変化量をオフセット速度（列/秒）に変換
+    const SPEED_FACTOR = 50;
     velocityRef.current = velocityRef.current * 0.6 + delta * SPEED_FACTOR * 0.4;
 
     const absVel = Math.abs(velocityRef.current);
-    if (absVel > 5) {
+    if (absVel > 0.05) {
       isSwingingRef.current = true;
 
       if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
@@ -150,7 +173,9 @@ export function POVMode({
     }
   }, [acceleration, permissionState]);
 
-  // ---- タッチスワイプ（テスト用） ----
+  // ============================================================
+  // タッチスワイプ（テスト用）
+  // ============================================================
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     touchPrevXRef.current = e.touches[0].clientX;
   }, []);
@@ -161,8 +186,8 @@ export function POVMode({
     const deltaX = currentX - touchPrevXRef.current;
     touchPrevXRef.current = currentX;
 
-    // スワイプdeltaXをpixel/frameとして速度に加算
-    velocityRef.current = velocityRef.current * 0.5 + (-deltaX * 2) * 0.5;
+    // スワイプ: 1px移動 = 0.3列/frame 程度の速度を与える
+    velocityRef.current = velocityRef.current * 0.5 + (-deltaX * 0.5) * 0.5;
     isSwingingRef.current = true;
 
     if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
@@ -176,113 +201,76 @@ export function POVMode({
     touchPrevXRef.current = null;
   }, []);
 
-  // ---- Canvas 描画ループ ----
+  // ============================================================
+  // rAFループ — セルのbackgroundColorを直接書き換える
+  // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-
-    const resize = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-    };
-    resize();
-    window.addEventListener("resize", resize);
-
-    const rgb = hexToRgb(textColor);
-
     const loop = (now: number) => {
       if (lastTimeRef.current === 0) lastTimeRef.current = now;
-      const dt = Math.min(now - lastTimeRef.current, 50); // 最大50ms（タブ非アクティブ対策）
+      const dt = Math.min(now - lastTimeRef.current, 50);
       lastTimeRef.current = now;
 
-      const screenW = canvas.width;
-      const screenH = canvas.height;
       const bitmap = bitmapRef.current;
       const totalCols = totalColsRef.current;
+      const cells = cellRefsRef.current;
 
-      // ---- オフセット更新 ----
-      if (totalCols > 0) {
-        // velocity (px/sec) → dt(ms) で距離計算
-        offsetRef.current += velocityRef.current * (dt / 1000) * screenW * 0.5;
-
-        // オフセットをビットマップ幅でループ
-        offsetRef.current =
-          ((offsetRef.current % totalCols) + totalCols) % totalCols;
-      }
-
-      // ---- 描画 ----
-      ctx.imageSmoothingEnabled = false;
-
-      // 背景黒
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(0, 0, screenW, screenH);
-
-      if (totalCols === 0) {
+      if (totalCols === 0 || cells.length === 0) {
         rafRef.current = requestAnimationFrame(loop);
         return;
       }
 
-      const bitmapHeight = bitmap[0]?.length ?? 1;
-      const pixelH = screenH / bitmapHeight; // 1ビットマップピクセルの画面上の高さ
+      // ---- オフセット更新（列単位） ----
+      offsetRef.current += velocityRef.current * (dt / 1000);
+      offsetRef.current = ((offsetRef.current % totalCols) + totalCols) % totalCols;
 
-      // 振っている間は明るく、止まっている間は薄く
+      const colIndex = Math.floor(offsetRef.current);
+      const col = bitmap[colIndex];
+
+      // ---- 振っている間は明るく、止まっている間は暗く ----
+      const isSwinging = isSwingingRef.current;
       const absVel = Math.abs(velocityRef.current);
-      const brightness = isSwingingRef.current
-        ? Math.min(1, 0.3 + absVel * 0.05)
-        : 0.15;
+      const brightness = isSwinging
+        ? Math.min(1, 0.4 + absVel * 0.02)
+        : 0.08;
 
-      // グロー設定
-      const glowAlpha = brightness;
-      ctx.shadowColor = textColor;
-      ctx.shadowBlur = isSwingingRef.current ? 8 * dpr : 3 * dpr;
+      // テキストカラーをbrightnessでスケール
+      // textColor は "#rrggbb" 形式を想定
+      let onColor: string;
+      let offColor = "#000000";
 
-      const fillR = Math.round(rgb.r * brightness);
-      const fillG = Math.round(rgb.g * brightness);
-      const fillB = Math.round(rgb.b * brightness);
-      ctx.fillStyle = `rgb(${fillR},${fillG},${fillB})`;
+      if (brightness >= 1) {
+        onColor = textColor;
+      } else {
+        // hex → rgb で輝度を適用
+        const hex = textColor.replace("#", "");
+        const r = Math.round(parseInt(hex.slice(0, 2), 16) * brightness);
+        const g = Math.round(parseInt(hex.slice(2, 4), 16) * brightness);
+        const b = Math.round(parseInt(hex.slice(4, 6), 16) * brightness);
+        onColor = `rgb(${r},${g},${b})`;
+      }
 
-      // ビットマップを画面横幅にマッピング
-      // 1スクリーンピクセル = 1ビットマップ列（最高解像度）
-      for (let sx = 0; sx < screenW; sx++) {
-        // このスクリーン列が対応するビットマップ列
-        const bx = Math.floor((sx + offsetRef.current)) % totalCols;
-        const col = bitmap[bx];
-        if (!col) continue;
-
-        for (let by = 0; by < bitmapHeight; by++) {
-          if (col[by]) {
-            const sy = by * pixelH;
-            ctx.fillRect(sx, sy, 1, Math.ceil(pixelH));
-          }
+      // ---- セルのDOM背景色を直接更新 ----
+      if (col) {
+        for (let y = 0; y < HEIGHT_ROWS; y++) {
+          cells[y].style.backgroundColor = col[y] ? onColor : offColor;
+        }
+      } else {
+        for (let y = 0; y < HEIGHT_ROWS; y++) {
+          cells[y].style.backgroundColor = offColor;
         }
       }
 
-      // グロー後にリセット（他の描画に影響しないよう）
-      ctx.shadowBlur = 0;
-
-      // ---- デバッグ更新（間引き） ----
+      // ---- デバッグ更新（10フレームに1回） ----
       debugCountRef.current++;
       if (debugCountRef.current % 10 === 0) {
         setDebug({
           x: Math.round(prevAccRef.current * 100) / 100,
           vel: Math.round(velocityRef.current * 10) / 10,
-          offset: Math.round(offsetRef.current),
+          col: colIndex,
         });
       }
-
-      // glowAlpha は計算済みだが未使用警告回避
-      void glowAlpha;
 
       rafRef.current = requestAnimationFrame(loop);
     };
@@ -290,13 +278,15 @@ export function POVMode({
     rafRef.current = requestAnimationFrame(loop);
 
     return () => {
-      window.removeEventListener("resize", resize);
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       lastTimeRef.current = 0;
     };
   }, [permissionState, textColor]);
 
-  // クリーンアップ
+  // ---- クリーンアップ ----
   useEffect(() => {
     return () => {
       if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
@@ -368,7 +358,7 @@ export function POVMode({
   }
 
   // ============================================================
-  // granted — 縦ストライプ方式POVモード
+  // granted — 縦線1本方式POVモード
   // ============================================================
   return (
     <div
@@ -377,21 +367,26 @@ export function POVMode({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0"
-        style={{ display: "block" }}
+      {/* 縦線コンテナ: 画面中央に幅4px、高さ100vh */}
+      <div
+        ref={lineContainerRef}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: "4px",
+          height: "100%",
+        }}
       />
 
       {/* 振り方ガイド（停止中のみ表示） */}
-      {!isSwingingRef.current && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <p className="text-white/20 text-sm text-center px-8">
-            スマホを横に素早く振ってください<br />
-            <span className="text-white/10 text-xs">または画面をスワイプでテスト</span>
-          </p>
-        </div>
-      )}
+      <div className="absolute bottom-16 left-0 right-0 flex justify-center pointer-events-none">
+        <p className="text-white/20 text-sm text-center px-8">
+          スマホを横に素早く振ってください<br />
+          <span className="text-white/10 text-xs">または画面をスワイプでテスト</span>
+        </p>
+      </div>
 
       {/* デバッグ表示 */}
       <div className="absolute top-3 left-3 pointer-events-none z-50">
@@ -405,7 +400,7 @@ export function POVMode({
         >
           <div>x: {debug.x.toFixed(3)}</div>
           <div>vel: {debug.vel.toFixed(1)}</div>
-          <div>offset: {debug.offset}</div>
+          <div>col: {debug.col}</div>
         </div>
       </div>
     </div>
