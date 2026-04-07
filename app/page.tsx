@@ -44,7 +44,7 @@ export default function Home() {
   useWakeLock(true);
 
   // 加速度センサー（POVモード）
-  const { acceleration, permissionState, requestPermission } = useDeviceMotion(
+  const { permissionState, requestPermission } = useDeviceMotion(
     state.mode === "pov"
   );
 
@@ -82,7 +82,6 @@ export default function Home() {
           <POVMode
             text={state.text}
             textColor={state.textColor}
-            acceleration={acceleration.x}
             permissionState={permissionState}
             onRequestPermission={handleRequestPermission}
           />
