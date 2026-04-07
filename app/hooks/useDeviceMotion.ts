@@ -72,8 +72,9 @@ export function useDeviceMotion(enabled: boolean): UseDeviceMotionReturn {
     };
 
     if (typeof DeviceMotionEventAny.requestPermission !== "function") {
-      // Android: auto-grant
+      // Android: auto-grant and start listening
       setPermissionState("granted");
+      window.addEventListener("devicemotion", handleMotion);
     }
     // iOS: stays "unknown" until user taps
   }, []);

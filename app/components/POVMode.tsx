@@ -83,11 +83,12 @@ export function POVMode({
     const delta = Math.abs(acceleration - prevAccRef.current);
     prevAccRef.current = acceleration;
 
-    // ローパスフィルター
-    velocityRef.current = velocityRef.current * 0.6 + delta * 0.4;
+    // ローパスフィルター（感度を上げる）
+    velocityRef.current = velocityRef.current * 0.3 + delta * 0.7;
 
-    if (velocityRef.current > 0.3 && columnsRef.current.length > 0) {
-      const skip = Math.max(1, Math.round(velocityRef.current * 1.2));
+    // 閾値を大幅に下げて検知しやすく
+    if (velocityRef.current > 0.05 && columnsRef.current.length > 0) {
+      const skip = Math.max(1, Math.round(velocityRef.current * 3));
       colIndexRef.current = (colIndexRef.current + skip) % columnsRef.current.length;
     }
   }, [acceleration, permissionState]);
@@ -125,7 +126,7 @@ export function POVMode({
       }
 
       const speed = velocityRef.current;
-      const isMoving = speed > 0.3;
+      const isMoving = speed > 0.05;
 
       if (!isMoving) {
         // 静止時: テキスト全体を薄く表示（ガイド）
