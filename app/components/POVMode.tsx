@@ -84,6 +84,9 @@ export function POVMode({
   // ---- 加速度の前回値 ----
   const prevAccRef = useRef(0);
 
+  // ---- 描画済み列の履歴（残像用） ----
+  const historyRef = useRef<number[]>([]);
+
   // ---- rAF ----
   const rafRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
@@ -200,10 +203,8 @@ export function POVMode({
       const canvasH = canvas.height;
       const isSwinging = isSwingingRef.current;
 
-      // ---- 毎フレーム: 半透明黒オーバーレイでフェードアウト ----
-      // isSwinging中も停止中も常にオーバーレイをかける
-      // → 停止するとすぐ黒になり、振ると残像が尾を引く
-      ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
+      // ---- 背景を黒でクリア ----
+      ctx.fillStyle = "#000000";
       ctx.fillRect(0, 0, canvasW, canvasH);
 
       if (isSwinging) {
@@ -211,29 +212,54 @@ export function POVMode({
         offsetRef.current += velocityRef.current * (dt / 1000);
         offsetRef.current = ((offsetRef.current % totalCols) + totalCols) % totalCols;
 
-        const offset = offsetRef.current;
+        const currentCol = Math.floor(offsetRef.current) % totalCols;
 
-        // ---- 現在列のX位置を計算 ----
-        const currentCol = Math.floor(offset) % totalCols;
-        const screenX = (currentCol / totalCols) * canvasW;
-        const lineWidth = Math.max(6, Math.ceil(canvasW / totalCols) * 2);
+        // ---- 履歴に現在列を追加 ----
+        historyRef.current.push(currentCol);
+        // 履歴を最大TRAIL_LENGTH件に制限
+        const TRAIL_LENGTH = 60; // 60フレーム分 = 約1秒の軌跡
+        if (historyRef.current.length > TRAIL_LENGTH) {
+          historyRef.current = historyRef.current.slice(-TRAIL_LENGTH);
+        }
+
+        const lineWidth = Math.max(4, Math.ceil(canvasW / totalCols));
         const cellH = canvasH / HEIGHT_ROWS;
+        const history = historyRef.current;
+        const hex = textColor.replace("#", "");
+        const baseR = parseInt(hex.slice(0, 2), 16);
+        const baseG = parseInt(hex.slice(2, 4), 16);
+        const baseB = parseInt(hex.slice(4, 6), 16);
 
-        // ---- 現在列のONピクセルだけを縦ラインとして描画 ----
-        const col = bitmap[currentCol];
-        if (col) {
-          ctx.fillStyle = textColor;
-          ctx.shadowBlur = 20;
-          ctx.shadowColor = textColor;
+        // ---- 履歴の全列をフェードグラデーション付きで描画 ----
+        for (let i = 0; i < history.length; i++) {
+          const col = bitmap[history[i]];
+          if (!col) continue;
+
+          // 古いほど暗い（最新=1.0、最古=0.05）
+          const age = (history.length - 1 - i) / Math.max(1, history.length - 1);
+          const brightness = 1.0 - age * 0.95;
+          const r = Math.round(baseR * brightness);
+          const g = Math.round(baseG * brightness);
+          const b = Math.round(baseB * brightness);
+
+          const screenX = (history[i] / totalCols) * canvasW;
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+
+          // 最新の数フレームだけグロー追加
+          if (i > history.length - 5) {
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = textColor;
+          } else {
+            ctx.shadowBlur = 0;
+          }
 
           for (let y = 0; y < HEIGHT_ROWS; y++) {
             if (col[y]) {
               ctx.fillRect(screenX, y * cellH, lineWidth, cellH);
             }
           }
-
-          ctx.shadowBlur = 0;
         }
+        ctx.shadowBlur = 0;
 
         // ---- デバッグ更新（10フレームに1回） ----
         debugCountRef.current++;
@@ -245,7 +271,8 @@ export function POVMode({
           });
         }
       } else {
-        // 振っていない: オーバーレイのみで自然にフェードアウト
+        // 振っていない: 履歴をクリア → 画面は黒のまま
+        historyRef.current = [];
         debugCountRef.current++;
         if (debugCountRef.current % 10 === 0) {
           setDebug({
