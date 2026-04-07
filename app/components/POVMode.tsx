@@ -104,8 +104,9 @@ export function POVMode({
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ---- 画面色 ----
-  // "on" = textColor, "off" = black
-  const [screenOn, setScreenOn] = useState(false);
+  // DOM直接操作（Reactのstate更新はrAF 60fpsに追いつかないため）
+  const screenRef = useRef<HTMLDivElement>(null);
+  const [screenOn, setScreenOn] = useState(false); // デバッグ表示用のみ
 
   // ---- デバッグ表示 ----
   const [debug, setDebug] = useState({
@@ -167,7 +168,9 @@ export function POVMode({
       stopTimerRef.current = setTimeout(() => {
         isSwingingRef.current = false;
         currentColRef.current = 0;
-        setScreenOn(false);
+        if (screenRef.current) {
+          screenRef.current.style.backgroundColor = "#000000";
+        }
       }, 300); // 0.3秒静止で停止
     }
   }, [acceleration, permissionState]);
@@ -239,7 +242,10 @@ export function POVMode({
 
         const col = bitmapRef.current[currentColRef.current];
         const isOn = col ? columnHasPixel(col) : false;
-        setScreenOn(isOn);
+        // DOM直接操作で即座に色切り替え（React再レンダリングを待たない）
+        if (screenRef.current) {
+          screenRef.current.style.backgroundColor = isOn ? textColor : "#000000";
+        }
 
         // デバッグ更新（毎フレームは重いので間引き）
         if (Math.random() < 0.1) {
@@ -252,7 +258,9 @@ export function POVMode({
           });
         }
       } else {
-        setScreenOn(false);
+        if (screenRef.current) {
+          screenRef.current.style.backgroundColor = "#000000";
+        }
       }
 
       rafRef.current = requestAnimationFrame(loop);
@@ -347,10 +355,10 @@ export function POVMode({
   // ============================================================
   return (
     <div
+      ref={screenRef}
       className="w-full h-full relative"
       style={{
-        backgroundColor: screenOn ? textColor : "#000000",
-        // transitionなし：残像効果のため即座に切り替える
+        backgroundColor: "#000000",
       }}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
