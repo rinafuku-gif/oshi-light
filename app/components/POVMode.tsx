@@ -12,10 +12,9 @@ interface POVModeProps {
 
 // ---- 定数（モジュールスコープ） ----
 const BITMAP_HEIGHT = 48;
-const SWING_THRESHOLD = 1.5;
-const VELOCITY_DECAY = 0.88;
-const FADE_ALPHA = 0.12;
-const COL_SPEED_SCALE = 200;
+const SWING_THRESHOLD = 2.0;   // この加速度(m/s²)を超えたらスイング開始
+const COL_ADVANCE_SCALE = 10;  // absAcc * このスケールで列進行速度(列/フレーム)
+const FADE_ALPHA = 0.07;       // フェード速度（小さいほど残像が長い）
 
 // ============================================================
 // テキストをビットマップ列配列に変換
@@ -90,9 +89,9 @@ export function POVMode({
   const bitmapRef = useRef<boolean[][]>([]);
   const totalColsRef = useRef(0);
 
-  const velocityRef = useRef(0);
   const positionRef = useRef(0);
-  const prevAccRef = useRef(0);
+  const prevAccSignRef = useRef(0); // 前フレームの加速度の符号（+1 / -1 / 0）
+  const accelerationRef = useRef(acceleration); // rAFループ内で最新値を参照するためのref
 
   const isSwingingRef = useRef(false);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -115,7 +114,6 @@ export function POVMode({
     bitmapRef.current = cols;
     totalColsRef.current = cols.length;
     positionRef.current = 0;
-    velocityRef.current = 0;
   }, [text]);
 
   useEffect(() => {
@@ -124,28 +122,39 @@ export function POVMode({
     }
   }, [buildBitmap, permissionState]);
 
+  // acceleration が変化するたびに ref を同期
+  accelerationRef.current = acceleration;
+
   // ============================================================
   // 加速度センサー入力
+  // acceleration.x の符号変化（スイング方向の反転）を検出して列をリセット
   // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
 
     const absAcc = Math.abs(acceleration);
-
-    if (absAcc > SWING_THRESHOLD && !isSwingingRef.current) {
-      positionRef.current = 0;
-      velocityRef.current = 0;
-    }
+    const currentSign = acceleration > 0 ? 1 : acceleration < 0 ? -1 : 0;
 
     if (absAcc > SWING_THRESHOLD) {
+      // 符号が反転した（スイング方向が変わった）→ 列を0にリセット
+      if (
+        prevAccSignRef.current !== 0 &&
+        currentSign !== 0 &&
+        currentSign !== prevAccSignRef.current
+      ) {
+        positionRef.current = 0;
+      }
+
       isSwingingRef.current = true;
       if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
       stopTimerRef.current = setTimeout(() => {
         isSwingingRef.current = false;
-      }, 300);
+      }, 400);
     }
 
-    prevAccRef.current = acceleration;
+    if (currentSign !== 0) {
+      prevAccSignRef.current = currentSign;
+    }
   }, [acceleration, permissionState]);
 
   // ============================================================
@@ -216,13 +225,15 @@ export function POVMode({
 
       if (isSwingingRef.current) {
         // ---- 位置推定 ----
-        if (touchPrevXRef.current !== null || Math.abs(touchVelRef.current) > 0.1) {
-          positionRef.current += touchVelRef.current * dt * 4;
+        // タッチ操作: deltaXの絶対値で列進行速度を決める
+        // センサー操作: absAcc * COL_ADVANCE_SCALE で列進行速度を決める
+        if (Math.abs(touchVelRef.current) > 0.5) {
+          positionRef.current += Math.abs(touchVelRef.current) * 0.4;
         } else {
-          const acc = prevAccRef.current;
-          velocityRef.current += acc * COL_SPEED_SCALE * dt;
-          velocityRef.current *= VELOCITY_DECAY;
-          positionRef.current += velocityRef.current * dt;
+          const absAcc = Math.abs(accelerationRef.current);
+          if (absAcc > SWING_THRESHOLD) {
+            positionRef.current += absAcc * COL_ADVANCE_SCALE * dt * 60;
+          }
         }
 
         // 位置を0〜totalCols-1にクランプ（ラップしない — 左端から右端に描く）
