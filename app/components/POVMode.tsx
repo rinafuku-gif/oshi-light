@@ -158,7 +158,7 @@ export function POVMode({
     prevAccRef.current = raw;
 
     // SPEED_FACTOR: 加速度の変化量をオフセット速度（列/秒）に変換
-    const SPEED_FACTOR = 50;
+    const SPEED_FACTOR = 200;
     velocityRef.current = velocityRef.current * 0.6 + delta * SPEED_FACTOR * 0.4;
 
     const absVel = Math.abs(velocityRef.current);
@@ -375,7 +375,7 @@ export function POVMode({
           top: 0,
           left: "50%",
           transform: "translateX(-50%)",
-          width: "4px",
+          width: "6px",
           height: "100%",
         }}
       />
