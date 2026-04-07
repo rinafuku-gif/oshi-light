@@ -90,17 +90,18 @@ export function POVMode({
   // ---- タッチスワイプ ----
   const touchPrevXRef = useRef<number | null>(null);
 
-  // ---- 縦線コンテナ（DOM直接操作用） ----
-  const lineContainerRef = useRef<HTMLDivElement>(null);
-  // セルのDOM要素参照（配列）
-  const cellRefsRef = useRef<HTMLDivElement[]>([]);
+  // ---- Canvas 帯 ----
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // ---- デバッグ（10フレームに1回だけsetState） ----
   const [debug, setDebug] = useState({ x: 0, vel: 0, col: 0 });
   const debugCountRef = useRef(0);
 
-  // ---- セル数（縦解像度） ----
-  const HEIGHT_ROWS = 50;
+  // ---- 帯のパラメータ ----
+  const BAND_WIDTH = 120;   // 帯の幅 (px, CSS)
+  const DISPLAY_COLS = 40;  // 帯内の横方向グリッド数
+  const HEIGHT_ROWS = 50;   // 縦方向グリッド数
+  const SPEED_FACTOR = 150; // 加速度→速度変換係数
 
   // ============================================================
   // ビットマップ生成
@@ -120,34 +121,6 @@ export function POVMode({
   }, [buildBitmap, permissionState]);
 
   // ============================================================
-  // セルのDOM構築（縦線コンテナ内に HEIGHT_ROWS 個のセルを配置）
-  // ============================================================
-  useEffect(() => {
-    if (permissionState !== "granted") return;
-
-    const container = lineContainerRef.current;
-    if (!container) return;
-
-    // 既存セルをクリア
-    container.innerHTML = "";
-    cellRefsRef.current = [];
-
-    const cellHeight = 100 / HEIGHT_ROWS;
-
-    for (let i = 0; i < HEIGHT_ROWS; i++) {
-      const cell = document.createElement("div");
-      cell.style.position = "absolute";
-      cell.style.left = "0";
-      cell.style.width = "100%";
-      cell.style.top = `${i * cellHeight}%`;
-      cell.style.height = `${cellHeight}%`;
-      cell.style.backgroundColor = "#000000";
-      container.appendChild(cell);
-      cellRefsRef.current.push(cell);
-    }
-  }, [permissionState]);
-
-  // ============================================================
   // 加速度 → velocity 変換
   // ============================================================
   useEffect(() => {
@@ -157,8 +130,6 @@ export function POVMode({
     const delta = raw - prevAccRef.current;
     prevAccRef.current = raw;
 
-    // SPEED_FACTOR: 加速度の変化量をオフセット速度（列/秒）に変換
-    const SPEED_FACTOR = 200;
     velocityRef.current = velocityRef.current * 0.6 + delta * SPEED_FACTOR * 0.4;
 
     const absVel = Math.abs(velocityRef.current);
@@ -186,7 +157,6 @@ export function POVMode({
     const deltaX = currentX - touchPrevXRef.current;
     touchPrevXRef.current = currentX;
 
-    // スワイプ: 1px移動 = 0.3列/frame 程度の速度を与える
     velocityRef.current = velocityRef.current * 0.5 + (-deltaX * 0.5) * 0.5;
     isSwingingRef.current = true;
 
@@ -202,7 +172,7 @@ export function POVMode({
   }, []);
 
   // ============================================================
-  // rAFループ — セルのbackgroundColorを直接書き換える
+  // rAFループ — Canvas帯方式
   // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
@@ -214,9 +184,15 @@ export function POVMode({
 
       const bitmap = bitmapRef.current;
       const totalCols = totalColsRef.current;
-      const cells = cellRefsRef.current;
+      const canvas = canvasRef.current;
 
-      if (totalCols === 0 || cells.length === 0) {
+      if (totalCols === 0 || !canvas) {
+        rafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
         rafRef.current = requestAnimationFrame(loop);
         return;
       }
@@ -225,25 +201,20 @@ export function POVMode({
       offsetRef.current += velocityRef.current * (dt / 1000);
       offsetRef.current = ((offsetRef.current % totalCols) + totalCols) % totalCols;
 
-      const colIndex = Math.floor(offsetRef.current);
-      const col = bitmap[colIndex];
+      const offset = offsetRef.current;
 
-      // ---- 振っている間は明るく、止まっている間は暗く ----
+      // ---- 輝度計算 ----
       const isSwinging = isSwingingRef.current;
       const absVel = Math.abs(velocityRef.current);
       const brightness = isSwinging
         ? Math.min(1, 0.4 + absVel * 0.02)
         : 0.08;
 
-      // テキストカラーをbrightnessでスケール
-      // textColor は "#rrggbb" 形式を想定
+      // onColor 計算
       let onColor: string;
-      let offColor = "#000000";
-
       if (brightness >= 1) {
         onColor = textColor;
       } else {
-        // hex → rgb で輝度を適用
         const hex = textColor.replace("#", "");
         const r = Math.round(parseInt(hex.slice(0, 2), 16) * brightness);
         const g = Math.round(parseInt(hex.slice(2, 4), 16) * brightness);
@@ -251,14 +222,34 @@ export function POVMode({
         onColor = `rgb(${r},${g},${b})`;
       }
 
-      // ---- セルのDOM背景色を直接更新 ----
-      if (col) {
+      const dpr = window.devicePixelRatio || 1;
+      const canvasW = canvas.width;   // 物理ピクセル
+      const canvasH = canvas.height;  // 物理ピクセル
+
+      const cellW = canvasW / DISPLAY_COLS;
+      const cellH = canvasH / HEIGHT_ROWS;
+
+      // ---- 背景クリア ----
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvasW, canvasH);
+
+      // ---- ドットマトリクス描画 ----
+      ctx.fillStyle = onColor;
+      for (let dx = 0; dx < DISPLAY_COLS; dx++) {
+        const bitmapX = (Math.floor(offset) + dx) % totalCols;
+        const col = bitmap[bitmapX];
+        if (!col) continue;
         for (let y = 0; y < HEIGHT_ROWS; y++) {
-          cells[y].style.backgroundColor = col[y] ? onColor : offColor;
-        }
-      } else {
-        for (let y = 0; y < HEIGHT_ROWS; y++) {
-          cells[y].style.backgroundColor = offColor;
+          if (col[y]) {
+            // セル間に1物理pxの隙間を開けることでドットらしく見せる
+            const gap = Math.max(1, Math.floor(dpr));
+            ctx.fillRect(
+              dx * cellW + gap,
+              y * cellH + gap,
+              Math.max(1, cellW - gap),
+              Math.max(1, cellH - gap)
+            );
+          }
         }
       }
 
@@ -268,7 +259,7 @@ export function POVMode({
         setDebug({
           x: Math.round(prevAccRef.current * 100) / 100,
           vel: Math.round(velocityRef.current * 10) / 10,
-          col: colIndex,
+          col: Math.floor(offset),
         });
       }
 
@@ -285,6 +276,27 @@ export function POVMode({
       lastTimeRef.current = 0;
     };
   }, [permissionState, textColor]);
+
+  // ============================================================
+  // Canvas サイズをウィンドウに合わせる（DPR対応）
+  // ============================================================
+  useEffect(() => {
+    if (permissionState !== "granted") return;
+
+    const resizeCanvas = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = BAND_WIDTH * dpr;
+      canvas.height = window.innerHeight * dpr;
+      canvas.style.width = `${BAND_WIDTH}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+    };
+
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+    return () => window.removeEventListener("resize", resizeCanvas);
+  }, [permissionState]);
 
   // ---- クリーンアップ ----
   useEffect(() => {
@@ -358,7 +370,7 @@ export function POVMode({
   }
 
   // ============================================================
-  // granted — 縦線1本方式POVモード
+  // granted — Canvas帯方式POVモード
   // ============================================================
   return (
     <div
@@ -367,16 +379,16 @@ export function POVMode({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* 縦線コンテナ: 画面中央に幅4px、高さ100vh */}
-      <div
-        ref={lineContainerRef}
+      {/* Canvas帯: 画面中央に幅120px、高さ100vh */}
+      <canvas
+        ref={canvasRef}
         style={{
           position: "absolute",
           top: 0,
           left: "50%",
           transform: "translateX(-50%)",
-          width: "6px",
-          height: "100%",
+          display: "block",
+          imageRendering: "pixelated",
         }}
       />
 
