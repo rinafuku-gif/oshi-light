@@ -100,7 +100,7 @@ export function POVMode({
 
   // ---- パラメータ ----
   const HEIGHT_ROWS = 50;
-  const SPEED_FACTOR = 200;
+  const SPEED_FACTOR = 80;
 
   // ============================================================
   // ビットマップ生成
@@ -203,7 +203,7 @@ export function POVMode({
       // ---- 毎フレーム: 半透明黒オーバーレイでフェードアウト ----
       // isSwinging中も停止中も常にオーバーレイをかける
       // → 停止するとすぐ黒になり、振ると残像が尾を引く
-      ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
       ctx.fillRect(0, 0, canvasW, canvasH);
 
       if (isSwinging) {
@@ -216,14 +216,14 @@ export function POVMode({
         // ---- 現在列のX位置を計算 ----
         const currentCol = Math.floor(offset) % totalCols;
         const screenX = (currentCol / totalCols) * canvasW;
-        const lineWidth = Math.max(3, canvasW / totalCols);
+        const lineWidth = Math.max(6, Math.ceil(canvasW / totalCols) * 2);
         const cellH = canvasH / HEIGHT_ROWS;
 
         // ---- 現在列のONピクセルだけを縦ラインとして描画 ----
         const col = bitmap[currentCol];
         if (col) {
           ctx.fillStyle = textColor;
-          ctx.shadowBlur = 8;
+          ctx.shadowBlur = 20;
           ctx.shadowColor = textColor;
 
           for (let y = 0; y < HEIGHT_ROWS; y++) {
