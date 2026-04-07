@@ -41,7 +41,7 @@ export function POVMode({
     // デバッグ表示を更新（100msごとに制限）
     setDebugDisplay({ x: Math.round(raw * 100) / 100, velocity: Math.round(velocityRef.current * 1000) / 1000 });
 
-    const threshold = 0.3; // 振りの閾値（iOSのaccelerationは重力除外で小さい値になるため低め）
+    const threshold = 0.08; // 振りの閾値（実機テストでvel=0.117程度なので低めに設定）
 
     if (velocityRef.current > threshold) {
       setIsFlashing(true);
