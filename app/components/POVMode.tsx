@@ -10,42 +10,46 @@ interface POVModeProps {
 }
 
 // ---- 定数 ----
-// 60Hzで0.5秒スイング = 30フレーム。実用的な文字数は2-3文字
-// 高さを抑えることで列数を減らし、確実に読めるようにする
-const BITMAP_HEIGHT = 24;
+// ビットマップ高さ: 8行。60Hzで0.4秒のスイング=24フレームが目安
+// フォントサイズを8pxに抑えることで列数を20-30以内に収める
+const BITMAP_HEIGHT = 8;
 
-// スイング検出: 速度がこの値を超えたらスキャン開始（m/s相当）
-const VELOCITY_THRESHOLD = 0.3;
-// 符号反転検出: このデルタ時間(ms)以内の反転はスイングとみなす
-const DIRECTION_CHANGE_WINDOW = 150;
+// スイング検出の閾値（m/s²）
+const SWING_THRESHOLD = 8.0;
 
-// スキャン方向
-type ScanDirection = "forward" | "backward";
-type ScanState = "IDLE" | "SCANNING" | "COOLDOWN";
+// 1スイングの推定持続時間（ms）初期値。学習で更新される
+const INITIAL_SWING_DURATION = 350;
+
+// 学習の重み（0.3=新データを30%反映）
+const LEARN_RATE = 0.3;
 
 // ============================================================
 // テキストをビットマップ列配列に変換
-// columns[x][y] = true/false
+// Canvas APIで8px高さで描画 → ImageDataでビット取得
+// 列数を20-30以内に収めることが最優先
 // ============================================================
-function textToBitmap(text: string): boolean[][] {
+function textToBitmap(text: string): number[] {
   const displayText = text || "推し";
+
+  if (typeof document === "undefined") return [];
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   if (!ctx) return [];
 
   const height = BITMAP_HEIGHT;
-  // 太いフォントの方が残像で見やすい
-  const fontSize = Math.floor(height * 0.9);
-  const fontStr = `900 ${fontSize}px system-ui, -apple-system, sans-serif`;
-  ctx.font = fontStr;
+  // 高さ8pxに収めるフォントサイズ（日本語含む）
+  const fontSize = 7;
+  const fontStr = `bold ${fontSize}px monospace`;
 
+  ctx.font = fontStr;
   const metrics = ctx.measureText(displayText);
   const textWidth = Math.ceil(metrics.width);
-  // 左右に少し余白
-  const padding = Math.ceil(textWidth * 0.05);
 
+  // 左右に1px余白
+  const padding = 1;
   const canvasWidth = textWidth + padding * 2;
+
   canvas.width = canvasWidth;
   canvas.height = height;
 
@@ -54,23 +58,35 @@ function textToBitmap(text: string): boolean[][] {
 
   ctx.font = fontStr;
   ctx.fillStyle = "#ffffff";
-  ctx.textBaseline = "middle";
-  ctx.fillText(displayText, padding, height / 2);
+  ctx.textBaseline = "top";
+  ctx.fillText(displayText, padding, 0);
 
   const imageData = ctx.getImageData(0, 0, canvasWidth, height);
   const data = imageData.data;
 
-  const columns: boolean[][] = [];
+  // 各列をビットマスクとして格納（ビット0=行0=最上行）
+  const columns: number[] = [];
   for (let x = 0; x < canvasWidth; x++) {
-    const col: boolean[] = [];
+    let mask = 0;
     for (let y = 0; y < height; y++) {
       const idx = (y * canvasWidth + x) * 4;
-      col.push(data[idx] > 80);
+      if (data[idx] > 80) {
+        mask |= (1 << y);
+      }
     }
-    columns.push(col);
+    columns.push(mask);
   }
 
-  return columns;
+  // 前後の空白列を除去してコンパクトにする
+  let start = 0;
+  let end = columns.length - 1;
+  while (start <= end && columns[start] === 0) start++;
+  while (end >= start && columns[end] === 0) end--;
+
+  // 両端に1列の余白を残す
+  const trimmed = columns.slice(Math.max(0, start - 1), end + 2);
+
+  return trimmed;
 }
 
 // ============================================================
@@ -87,30 +103,39 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 
 // ============================================================
 // 1列をcanvasに描画
+// 画面全体を黒クリアしてから、該当列のドットを横帯として描画
 // ============================================================
 function drawColumn(
-  colIndex: number,
+  colData: number,
   ctx: CanvasRenderingContext2D,
-  bitmap: boolean[][],
   canvasW: number,
   canvasH: number,
+  rows: number,
   color: string
 ) {
-  const col = bitmap[colIndex];
-  if (!col) return;
+  // 画面全体を黒クリア
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, canvasW, canvasH);
 
-  const rowH = canvasH / col.length;
+  if (colData === 0) return;
+
   const rgb = hexToRgb(color);
   const colorStr = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
 
-  // glow効果は軽めに（パフォーマンス優先）
-  ctx.shadowColor = colorStr;
-  ctx.shadowBlur = 12;
-  ctx.fillStyle = colorStr;
+  // 上下マージン（1行分）を確保して中央寄せ
+  const totalRows = rows + 2;
+  const rowHeight = canvasH / totalRows;
+  const yOffset = rowHeight; // 上マージン1行分
 
-  for (let y = 0; y < col.length; y++) {
-    if (col[y]) {
-      ctx.fillRect(0, Math.floor(y * rowH), canvasW, Math.ceil(rowH) + 1);
+  ctx.fillStyle = colorStr;
+  ctx.shadowColor = colorStr;
+  ctx.shadowBlur = 8;
+
+  for (let row = 0; row < rows; row++) {
+    if (colData & (1 << row)) {
+      const y = yOffset + row * rowHeight;
+      // 2pxの隙間でドット感を出す
+      ctx.fillRect(0, Math.floor(y), canvasW, Math.max(1, Math.ceil(rowHeight) - 2));
     }
   }
 
@@ -118,14 +143,14 @@ function drawColumn(
 }
 
 // ============================================================
-// POVMode — バーサライト方式
-// React stateを経由せず、refとrAFループで直接センサーを扱う
+// POVMode — バーサライト方式（根本修正版）
 //
-// 改善点:
-// 1. X軸加速度の符号反転でスイング折り返しを検出
-// 2. 速度積分によるリアルタイムスキャン速度制御
-// 3. 左→右、右→左の両方向表示（逆順）
-// 4. マウスドラッグ対応（デスクトップテスト用）
+// 変更点:
+// 1. Canvas 8pxビットマップで列数を20-30以内に抑制
+// 2. 加速度閾値ベースのスイング検出（速度積分廃止）
+// 3. 片方向（右スイング）のみ描画
+// 4. 時間経過ベースで列を進める（学習で精度向上）
+// 5. マウスドラッグ対応（デスクトップテスト用）
 // ============================================================
 export function POVMode({
   text,
@@ -137,26 +162,18 @@ export function POVMode({
   const guideRef = useRef<HTMLDivElement>(null);
 
   // ---- ビットマップ ----
-  const bitmapRef = useRef<boolean[][]>([]);
+  const bitmapRef = useRef<number[]>([]);
   const totalColsRef = useRef(0);
 
-  // ---- 状態マシン ----
-  const scanStateRef = useRef<ScanState>("IDLE");
-  const scanDirectionRef = useRef<ScanDirection>("forward");
-  // 速度ベースのスキャン: 積算速度→列インデックス
-  const scanColIndexRef = useRef(0); // 現在描画中の列（float）
-  const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ---- センサー速度積分 ----
-  const velocityRef = useRef(0);         // 推定X速度（m/s）
-  const prevAccXRef = useRef(0);         // 前フレームのX加速度
-  const prevAccSignRef = useRef(0);      // 前フレームの符号
-  const lastMotionTimeRef = useRef(0);   // 最終モーションイベント時刻
-  const directionChangedAtRef = useRef(0); // 最後に符号反転した時刻
+  // ---- スイング状態 ----
+  const isSwingingRef = useRef(false);
+  const swingStartTimeRef = useRef(0);
+  const swingDirectionRef = useRef<1 | -1>(1); // 1=右, -1=左
+  const estimatedSwingDurationRef = useRef(INITIAL_SWING_DURATION);
+  const currentColumnRef = useRef(-1);
 
   // ---- rAF ----
   const rafRef = useRef<number | null>(null);
-  const lastFrameTimeRef = useRef(0);
 
   // textColorはrAFループからrefで参照
   const textColorRef = useRef(textColor);
@@ -165,10 +182,7 @@ export function POVMode({
   // ---- マウス/タッチ操作（テスト用）----
   const pointerActiveRef = useRef(false);
   const pointerPrevXRef = useRef<number | null>(null);
-  const pointerAccumRef = useRef(0);      // 累積移動量（px）
-  const pointerDirectionRef = useRef<ScanDirection>("forward");
-  const pointerVelocityRef = useRef(0);   // pointer速度（px/ms）
-  const pointerLastTimeRef = useRef(0);
+  const pointerAccumRef = useRef(0);
 
   // ============================================================
   // ビットマップ生成
@@ -177,69 +191,49 @@ export function POVMode({
     const cols = textToBitmap(text);
     bitmapRef.current = cols;
     totalColsRef.current = cols.length;
-    scanColIndexRef.current = 0;
+    currentColumnRef.current = -1;
   }, [text]);
 
   // ============================================================
-  // スキャン開始
-  // ============================================================
-  const startScan = useCallback((direction: ScanDirection) => {
-    if (cooldownTimerRef.current) {
-      clearTimeout(cooldownTimerRef.current);
-      cooldownTimerRef.current = null;
-    }
-    scanDirectionRef.current = direction;
-    // forward: 列0から開始、backward: 最終列から開始
-    scanColIndexRef.current = direction === "forward" ? 0 : totalColsRef.current - 1;
-    scanStateRef.current = "SCANNING";
-  }, []);
-
-  // ============================================================
-  // スキャン終了（SCANNING → COOLDOWN → IDLE）
-  // ============================================================
-  const endScan = useCallback(() => {
-    scanStateRef.current = "COOLDOWN";
-    if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
-    cooldownTimerRef.current = setTimeout(() => {
-      scanStateRef.current = "IDLE";
-      cooldownTimerRef.current = null;
-    }, 80);
-  }, []);
-
-  // ============================================================
-  // devicemotion リスナー（速度積分、符号反転検出）
+  // devicemotion リスナー（加速度閾値ベース）
   // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
 
     const handleMotion = (e: DeviceMotionEvent) => {
       const acc = e.acceleration ?? e.accelerationIncludingGravity;
-      const accX = acc?.x ?? 0;
+      const ax = acc?.x ?? 0;
       const now = performance.now();
-      const dt = now - lastMotionTimeRef.current; // ms
 
-      if (lastMotionTimeRef.current > 0 && dt > 0 && dt < 100) {
-        // 加速度→速度（台形積分, dt ms → s変換）
-        const dtSec = dt / 1000;
-        velocityRef.current += ((accX + prevAccXRef.current) / 2) * dtSec;
-
-        // 速度の減衰（摩擦モデル: 静止に戻りやすくする）
-        velocityRef.current *= 0.92;
-
-        // 符号変化（スイング折り返し）を検出
-        const curSign = accX > 0.5 ? 1 : accX < -0.5 ? -1 : 0;
-        if (
-          curSign !== 0 &&
-          prevAccSignRef.current !== 0 &&
-          curSign !== prevAccSignRef.current
-        ) {
-          directionChangedAtRef.current = now;
+      if (!isSwingingRef.current) {
+        // スイング開始検出
+        if (Math.abs(ax) > SWING_THRESHOLD) {
+          isSwingingRef.current = true;
+          swingStartTimeRef.current = now;
+          swingDirectionRef.current = ax > 0 ? 1 : -1;
+          currentColumnRef.current = 0;
         }
-        prevAccSignRef.current = curSign !== 0 ? curSign : prevAccSignRef.current;
-      }
+      } else {
+        // 方向反転検出（逆方向の強い加速度）
+        const isReversal =
+          (swingDirectionRef.current === 1 && ax < -SWING_THRESHOLD) ||
+          (swingDirectionRef.current === -1 && ax > SWING_THRESHOLD);
 
-      prevAccXRef.current = accX;
-      lastMotionTimeRef.current = now;
+        if (isReversal) {
+          // 前スイングの実際の時間で推定値を学習
+          const actualDuration = now - swingStartTimeRef.current;
+          if (actualDuration > 100 && actualDuration < 2000) {
+            estimatedSwingDurationRef.current =
+              estimatedSwingDurationRef.current * (1 - LEARN_RATE) +
+              actualDuration * LEARN_RATE;
+          }
+          // 新しいスイング開始
+          isSwingingRef.current = true;
+          swingStartTimeRef.current = now;
+          swingDirectionRef.current = ax > 0 ? 1 : -1;
+          currentColumnRef.current = 0;
+        }
+      }
     };
 
     window.addEventListener("devicemotion", handleMotion);
@@ -250,15 +244,12 @@ export function POVMode({
 
   // ============================================================
   // rAFループ
-  // 速度ベースでスキャン列インデックスを更新
+  // 時間経過ベースで列インデックスを更新
   // ============================================================
   useEffect(() => {
     if (permissionState !== "granted") return;
 
     const loop = (now: number) => {
-      const dt = now - lastFrameTimeRef.current; // ms
-      lastFrameTimeRef.current = now;
-
       rafRef.current = requestAnimationFrame(loop);
 
       const bitmap = bitmapRef.current;
@@ -274,82 +265,56 @@ export function POVMode({
       const canvasW = canvas.width;
       const canvasH = canvas.height;
 
-      // ---- 完全クリア ----
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(0, 0, canvasW, canvasH);
-
       // ---- ポインター操作中はセンサーを無視 ----
       if (!pointerActiveRef.current) {
-        const vel = velocityRef.current;
-        const absVel = Math.abs(vel);
-        const state = scanStateRef.current;
+        if (isSwingingRef.current) {
+          const elapsed = now - swingStartTimeRef.current;
+          const progress = elapsed / estimatedSwingDurationRef.current;
 
-        if (state === "IDLE") {
-          if (absVel > VELOCITY_THRESHOLD) {
-            const dir: ScanDirection = vel > 0 ? "forward" : "backward";
-            startScan(dir);
-          }
-          // 折り返し直後（符号反転後DIRECTION_CHANGE_WINDOW ms以内）の検出
-          const timeSinceChange = now - directionChangedAtRef.current;
-          if (
-            directionChangedAtRef.current > 0 &&
-            timeSinceChange < DIRECTION_CHANGE_WINDOW &&
-            absVel > VELOCITY_THRESHOLD * 0.5
-          ) {
-            const dir: ScanDirection = vel > 0 ? "forward" : "backward";
-            startScan(dir);
-          }
-        }
+          if (progress >= 1.0) {
+            // スイング終了（推定時間を超えた）
+            isSwingingRef.current = false;
+            currentColumnRef.current = -1;
 
-        if (state === "SCANNING") {
-          if (absVel < 0.05) {
-            // 速度がほぼゼロ → スキャン終了
-            endScan();
+            // 黒画面
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(0, 0, canvasW, canvasH);
           } else {
-            // 速度に比例して列を進める
-            // absVel: m/s → 1秒あたりの列数 = totalCols * absVel * スケール係数
-            // スケール係数は経験的に調整（大きいほど速く切り替わる）
-            const colsPerMs = (totalCols * absVel * 4.0) / 1000;
-            const deltaCols = colsPerMs * Math.min(dt, 32); // 最大32msクランプ
+            currentColumnRef.current = Math.floor(progress * totalCols);
 
-            if (scanDirectionRef.current === "forward") {
-              scanColIndexRef.current += deltaCols;
-              if (scanColIndexRef.current >= totalCols) {
-                scanColIndexRef.current = totalCols - 1;
-                endScan();
-              }
+            // 右スイング（swingDirection === 1）のみ描画
+            if (swingDirectionRef.current === 1) {
+              const colIndex = Math.max(0, Math.min(totalCols - 1, currentColumnRef.current));
+              drawColumn(bitmap[colIndex], ctx, canvasW, canvasH, BITMAP_HEIGHT, textColorRef.current);
             } else {
-              scanColIndexRef.current -= deltaCols;
-              if (scanColIndexRef.current < 0) {
-                scanColIndexRef.current = 0;
-                endScan();
-              }
+              // 左スイング中は黒画面
+              ctx.fillStyle = "#000000";
+              ctx.fillRect(0, 0, canvasW, canvasH);
             }
-
-            const colIndex = Math.round(
-              Math.max(0, Math.min(totalCols - 1, scanColIndexRef.current))
-            );
-            drawColumn(colIndex, ctx, bitmap, canvasW, canvasH, textColorRef.current);
           }
+        } else {
+          // IDLE: 黒画面
+          ctx.fillStyle = "#000000";
+          ctx.fillRect(0, 0, canvasW, canvasH);
         }
       } else {
         // ---- ポインター（マウス/タッチ）操作時 ----
-        if (scanStateRef.current === "SCANNING") {
-          const colIndex = Math.round(
-            Math.max(0, Math.min(totalCols - 1, scanColIndexRef.current))
-          );
-          drawColumn(colIndex, ctx, bitmap, canvasW, canvasH, textColorRef.current);
+        const colIndex = Math.max(0, Math.min(totalCols - 1, currentColumnRef.current));
+        if (currentColumnRef.current >= 0) {
+          drawColumn(bitmap[colIndex], ctx, canvasW, canvasH, BITMAP_HEIGHT, textColorRef.current);
+        } else {
+          ctx.fillStyle = "#000000";
+          ctx.fillRect(0, 0, canvasW, canvasH);
         }
       }
 
       // ---- ガイド表示制御 ----
       if (guide) {
-        const scanning = scanStateRef.current === "SCANNING";
+        const scanning = isSwingingRef.current || pointerActiveRef.current;
         guide.style.opacity = scanning ? "0" : "1";
       }
     };
 
-    lastFrameTimeRef.current = performance.now();
     rafRef.current = requestAnimationFrame(loop);
 
     return () => {
@@ -358,7 +323,7 @@ export function POVMode({
         rafRef.current = null;
       }
     };
-  }, [permissionState, startScan, endScan]);
+  }, [permissionState]);
 
   // ============================================================
   // ポインター操作（マウス + タッチ共通）
@@ -368,76 +333,38 @@ export function POVMode({
     pointerActiveRef.current = true;
     pointerPrevXRef.current = clientX;
     pointerAccumRef.current = 0;
-    pointerVelocityRef.current = 0;
-    pointerLastTimeRef.current = performance.now();
-
-    // スキャン状態を開始（方向はmove時に確定）
-    if (cooldownTimerRef.current) {
-      clearTimeout(cooldownTimerRef.current);
-      cooldownTimerRef.current = null;
-    }
-    scanColIndexRef.current = 0;
-    scanStateRef.current = "SCANNING";
-    scanDirectionRef.current = "forward";
+    currentColumnRef.current = 0;
   }, []);
 
   const handlePointerMove = useCallback((clientX: number) => {
     if (!pointerActiveRef.current || pointerPrevXRef.current === null) return;
 
-    const now = performance.now();
-    const dt = now - pointerLastTimeRef.current;
     const deltaX = clientX - pointerPrevXRef.current;
-
-    if (dt > 0) {
-      pointerVelocityRef.current = deltaX / dt; // px/ms
-    }
-
     const totalCols = totalColsRef.current;
     if (totalCols === 0) return;
 
-    // 移動方向で表示方向を決定
-    if (Math.abs(deltaX) > 2) {
+    if (Math.abs(deltaX) > 1) {
       if (deltaX > 0) {
-        // 右移動: forward（左→右）
-        if (scanDirectionRef.current !== "forward") {
-          scanDirectionRef.current = "forward";
-          scanColIndexRef.current = 0;
-          pointerAccumRef.current = 0;
-        }
+        // 右移動のみ有効
         pointerAccumRef.current += deltaX;
-      } else {
-        // 左移動: backward（右→左）
-        if (scanDirectionRef.current !== "backward") {
-          scanDirectionRef.current = "backward";
-          scanColIndexRef.current = totalCols - 1;
-          pointerAccumRef.current = 0;
-        }
-        pointerAccumRef.current += Math.abs(deltaX);
       }
+      // 左移動は無視（片方向のみ）
     }
 
-    // 画面幅に対する累積移動量の割合 → 列インデックス
+    // 画面幅の70%で全列を表示
     const screenW = window.innerWidth;
-    // 画面幅の80%で全列を表示する（速すぎず遅すぎず）
-    const progress = Math.min(pointerAccumRef.current / (screenW * 0.8), 1.0);
+    const progress = Math.min(pointerAccumRef.current / (screenW * 0.7), 1.0);
+    currentColumnRef.current = Math.floor(progress * (totalCols - 1));
 
-    if (scanDirectionRef.current === "forward") {
-      scanColIndexRef.current = Math.floor(progress * (totalCols - 1));
-    } else {
-      scanColIndexRef.current = Math.floor((1 - progress) * (totalCols - 1));
-    }
-
-    scanStateRef.current = "SCANNING";
     pointerPrevXRef.current = clientX;
-    pointerLastTimeRef.current = now;
   }, []);
 
   const handlePointerEnd = useCallback(() => {
     pointerActiveRef.current = false;
     pointerPrevXRef.current = null;
     pointerAccumRef.current = 0;
-    endScan();
-  }, [endScan]);
+    currentColumnRef.current = -1;
+  }, []);
 
   // ---- タッチイベント ----
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -481,7 +408,6 @@ export function POVMode({
     const resizeCanvas = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      // DPRは最大2で上限。過度な解像度はパフォーマンスを落とす
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = window.innerWidth * dpr;
       canvas.height = window.innerHeight * dpr;
@@ -510,7 +436,6 @@ export function POVMode({
   // ---- クリーンアップ ----
   useEffect(() => {
     return () => {
-      if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
   }, []);
@@ -526,7 +451,7 @@ export function POVMode({
           このデバイスは加速度センサーに対応していません
         </p>
         <p className="text-white/50 text-sm text-center">
-          PCではマウスドラッグでテストできます
+          PCではマウスを左から右にドラッグでテストできます
         </p>
       </div>
     );
@@ -611,14 +536,20 @@ export function POVMode({
         }}
       />
 
+      {/* 使い方ガイド（スイング未検出時のみ表示）*/}
       <div
         ref={guideRef}
-        className="absolute bottom-16 left-0 right-0 flex justify-center pointer-events-none"
+        className="absolute inset-0 flex flex-col items-center justify-center gap-4 pointer-events-none"
         style={{ transition: "opacity 0.3s" }}
       >
-        <p className="text-white/60 text-sm text-center px-8">
-          スマホを横に素早く振ってください<br />
-          <span className="text-white/40 text-xs">PCはマウスを左右にドラッグでテスト</span>
+        <div className="flex flex-col items-start gap-3 px-8">
+          <p className="text-white/70 text-sm">🌙 暗い場所で使用してください</p>
+          <p className="text-white/70 text-sm">🔆 画面の明るさを最大にしてください</p>
+          <p className="text-white/70 text-sm">📱 スマホを横に素早く振ってください</p>
+          <p className="text-white/70 text-sm">✏️ 2-3文字以内がおすすめです</p>
+        </div>
+        <p className="text-white/30 text-xs text-center mt-2 px-8">
+          PCはマウスを左から右にドラッグでテスト
         </p>
       </div>
     </div>
