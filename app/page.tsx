@@ -53,7 +53,7 @@ export default function Home() {
   return (
     <div
       className="fixed inset-0 overflow-hidden select-none"
-      onClick={state.mode !== "pov" ? togglePanel : undefined}
+      onClick={togglePanel}
     >
       {/* メイン表示エリア */}
       <div className="w-full h-full">
