@@ -7,7 +7,6 @@ export interface AppState {
   bgColor: string;
   scrollSpeed: number; // px/sec
   blinkSpeed: number;  // ms per half-cycle
-  bpm: number;
   imageUrl: string | null;
   overlayText: boolean;
   panelOpen: boolean;
@@ -15,10 +14,12 @@ export interface AppState {
 
 export const COLOR_PRESETS = [
   { label: "ピンク", value: "#FF69B4" },
+  { label: "レッド", value: "#FF0000" },
   { label: "ブルー", value: "#00BFFF" },
   { label: "グリーン", value: "#00FF7F" },
   { label: "パープル", value: "#9370DB" },
   { label: "オレンジ", value: "#FF8C00" },
+  { label: "イエロー", value: "#FFD700" },
   { label: "ホワイト", value: "#FFFFFF" },
 ] as const;
 

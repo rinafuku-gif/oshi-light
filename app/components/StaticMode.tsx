@@ -14,30 +14,32 @@ export function StaticMode({ text, textColor, bgColor, imageUrl, overlayText }: 
   const textRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // フォントサイズを画面幅に合わせて最大化
+  // フォントサイズを画面幅に合わせて最大化（バイナリサーチ）
   useEffect(() => {
     const el = textRef.current;
     const container = containerRef.current;
     if (!el || !container || !text) return;
 
-    const containerW = container.clientWidth * 0.95;
-    const containerH = container.clientHeight * 0.9;
+    const calcFontSize = () => {
+      const containerW = container.clientWidth * 0.95;
+      const containerH = container.clientHeight * 0.9;
 
-    let size = 16;
-    el.style.fontSize = `${size}px`;
+      let lo = 16, hi = 400;
+      while (lo < hi - 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        el.style.fontSize = `${mid}px`;
+        if (el.scrollWidth <= containerW && el.scrollHeight <= containerH) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      el.style.fontSize = `${lo}px`;
+    };
 
-    while (
-      el.scrollWidth < containerW &&
-      el.scrollHeight < containerH &&
-      size < 400
-    ) {
-      size += 4;
-      el.style.fontSize = `${size}px`;
-    }
-
-    // 1ステップ戻す
-    size = Math.max(16, size - 4);
-    el.style.fontSize = `${size}px`;
+    calcFontSize();
+    window.addEventListener("resize", calcFontSize);
+    return () => window.removeEventListener("resize", calcFontSize);
   }, [text]);
 
   return (

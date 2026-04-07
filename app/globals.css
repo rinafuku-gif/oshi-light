@@ -65,20 +65,12 @@ body {
   text-shadow:
     0 0 10px currentColor,
     0 0 20px currentColor,
-    0 0 40px currentColor;
-}
-
-/* スライドアップパネル */
-.panel-enter {
-  transform: translateY(100%);
-}
-
-.panel-open {
-  transform: translateY(0);
-  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+    0 0 40px currentColor,
+    0 0 80px currentColor,
+    0 0 120px currentColor;
 }
 
 /* POVキャンバス */
-canvas {
+.pov-canvas {
   image-rendering: pixelated;
 }

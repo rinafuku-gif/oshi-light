@@ -91,11 +91,13 @@ export function SettingsPanel({ state, onChange, onClose }: SettingsPanelProps) 
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
+      if (file.size > 10 * 1024 * 1024) return;
 
+      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
       const url = URL.createObjectURL(file);
       onChange({ imageUrl: url });
     },
-    [onChange]
+    [onChange, state.imageUrl]
   );
 
   const clearImage = useCallback(() => {
@@ -112,7 +114,7 @@ export function SettingsPanel({ state, onChange, onClose }: SettingsPanelProps) 
   return (
     <div
       className="absolute inset-x-0 bottom-0 z-50 glass rounded-t-3xl"
-      style={{ maxHeight: "80vh", overflowY: "auto" }}
+      style={{ maxHeight: "80vh", overflowY: "auto", overscrollBehavior: "contain" }}
       onClick={(e) => e.stopPropagation()}
     >
       {/* ドラッグハンドル */}
@@ -255,31 +257,18 @@ export function SettingsPanel({ state, onChange, onClose }: SettingsPanelProps) 
 
         {/* 点滅設定 */}
         {isBlinkMode && (
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <span className="text-white/70 text-sm">BPM連動</span>
-              <button
-                onClick={() => onChange({ blinkSpeed: state.blinkSpeed })}
-                className="relative w-12 h-6 rounded-full transition-colors"
-                style={{ background: "rgba(255,255,255,0.15)" }}
-              >
-                <span className="text-white/40 text-xs">OFF</span>
-              </button>
-            </div>
-
-            <Slider
-              label="点滅速度"
-              value={state.blinkSpeed}
-              min={80}
-              max={1000}
-              step={20}
-              onChange={(v) => onChange({ blinkSpeed: v })}
-              formatValue={(v) => {
-                const bpm = Math.round(60000 / (v * 2));
-                return `${bpm} BPM`;
-              }}
-            />
-          </div>
+          <Slider
+            label="点滅速度"
+            value={state.blinkSpeed}
+            min={80}
+            max={1000}
+            step={20}
+            onChange={(v) => onChange({ blinkSpeed: v })}
+            formatValue={(v) => {
+              const bpm = Math.round(60000 / (v * 2));
+              return `${bpm} BPM`;
+            }}
+          />
         )}
 
         {/* 画像アップロード（staticモードのみ） */}
@@ -313,7 +302,7 @@ export function SettingsPanel({ state, onChange, onClose }: SettingsPanelProps) 
                   </button>
                   <button
                     onClick={clearImage}
-                    className="px-4 py-2.5 rounded-xl text-sm text-white/50 bg-white/08 border border-white/10 active:bg-white/15"
+                    className="px-4 py-2.5 rounded-xl text-sm text-white/50 bg-white/[0.08] border border-white/10 active:bg-white/15"
                   >
                     削除
                   </button>
@@ -332,7 +321,6 @@ export function SettingsPanel({ state, onChange, onClose }: SettingsPanelProps) 
               ref={fileInputRef}
               type="file"
               accept="image/*"
-              capture="environment"
               className="hidden"
               onChange={handleImageUpload}
             />

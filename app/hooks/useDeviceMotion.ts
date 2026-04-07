@@ -87,6 +87,17 @@ export function useDeviceMotion(enabled: boolean): UseDeviceMotionReturn {
     // iOS: stays "unknown" until user taps the button
   }, [startListening]);
 
+  // enabled/permissionState変化に応じてリスナーを開始/解除
+  useEffect(() => {
+    if (enabled && permissionState === "granted") {
+      startListening();
+    } else if (!enabled && listeningRef.current) {
+      window.removeEventListener("devicemotion", handleMotion);
+      listeningRef.current = false;
+      setAcceleration({ x: 0, y: 0, z: 0 });
+    }
+  }, [enabled, permissionState, startListening, handleMotion]);
+
   // クリーンアップ
   useEffect(() => {
     return () => {

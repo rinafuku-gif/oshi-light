@@ -17,7 +17,6 @@ const DEFAULT_STATE: AppState = {
   bgColor: "#000000",
   scrollSpeed: 150,
   blinkSpeed: 300,
-  bpm: 120,
   imageUrl: null,
   overlayText: false,
   panelOpen: false,
@@ -31,7 +30,10 @@ export default function Home() {
   }, []);
 
   const togglePanel = useCallback(() => {
-    setState((prev) => ({ ...prev, panelOpen: !prev.panelOpen }));
+    setState((prev) => {
+      if (prev.mode === "pov") return prev;
+      return { ...prev, panelOpen: !prev.panelOpen };
+    });
   }, []);
 
   const closePanel = useCallback(() => {
@@ -71,6 +73,7 @@ export default function Home() {
           <ScrollMode
             text={state.text}
             textColor={state.textColor}
+            bgColor={state.bgColor}
             speed={state.scrollSpeed}
           />
         )}
@@ -89,8 +92,6 @@ export default function Home() {
           <BlinkMode
             color={state.textColor}
             blinkSpeed={state.blinkSpeed}
-            bpm={state.bpm}
-            useBpm={false}
           />
         )}
       </div>
@@ -98,10 +99,14 @@ export default function Home() {
       {/* 設定ボタン（パネル閉じている時のみ） */}
       {!state.panelOpen && (
         <div
-          className="absolute bottom-6 right-5 z-40 pointer-events-none"
+          className="absolute bottom-6 right-5 z-40 pointer-events-auto"
+          onClick={(e) => {
+            e.stopPropagation();
+            setState((prev) => ({ ...prev, panelOpen: true }));
+          }}
         >
-          <div className="flex flex-col items-end gap-2">
-            <span className="text-white/20 text-xs">タップで設定</span>
+          <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
+            <span className="text-xl">⚙️</span>
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 {
+  "id": "/",
   "name": "推し活ライト",
   "short_name": "推し活ライト",
   "description": "スマホで使える電子うちわ・サイリウムアプリ",
@@ -7,6 +8,7 @@
   "orientation": "any",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",
+  "categories": ["entertainment", "lifestyle"],
   "icons": [
     {
       "src": "/icon-192.png",
@@ -16,7 +18,8 @@
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }
