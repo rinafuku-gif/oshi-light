@@ -34,7 +34,8 @@ function textToBitmap(
   // テキスト幅を計測してCanvas幅を決める
   const metrics = ctx.measureText(displayText);
   const textWidth = Math.ceil(metrics.width);
-  const padding = Math.ceil(fontSize * 0.2);
+  // 文字の前後に大きな空白を確保（バーサライトでON/OFFの差を出すため）
+  const padding = Math.ceil(textWidth * 0.5);
 
   const canvasWidth = textWidth + padding * 2;
   const canvasHeight = heightRows;
@@ -76,7 +77,11 @@ function textToBitmap(
 // 列にONピクセルが1つでもあるか判定
 // ============================================================
 function columnHasPixel(col: boolean[]): boolean {
-  return col.some((v) => v);
+  // 列のONピクセル密度で判定（文字の太い部分だけ光らせる）
+  const onCount = col.filter((v) => v).length;
+  const ratio = onCount / col.length;
+  // 5%以上のピクセルがONなら「文字がある列」と判定
+  return ratio > 0.05;
 }
 
 // ============================================================
