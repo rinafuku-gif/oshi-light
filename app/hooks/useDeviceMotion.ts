@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 interface MotionData {
   x: number;
@@ -17,9 +17,11 @@ interface UseDeviceMotionReturn {
 export function useDeviceMotion(enabled: boolean): UseDeviceMotionReturn {
   const [acceleration, setAcceleration] = useState<MotionData>({ x: 0, y: 0, z: 0 });
   const [permissionState, setPermissionState] = useState<"unknown" | "granted" | "denied" | "unavailable">("unknown");
+  const listeningRef = useRef(false);
 
   const handleMotion = useCallback((event: DeviceMotionEvent) => {
-    const acc = event.accelerationIncludingGravity;
+    // acceleration（重力除外）優先、なければaccelerationIncludingGravityにフォールバック
+    const acc = event.acceleration ?? event.accelerationIncludingGravity;
     if (!acc) return;
     setAcceleration({
       x: acc.x ?? 0,
@@ -27,6 +29,12 @@ export function useDeviceMotion(enabled: boolean): UseDeviceMotionReturn {
       z: acc.z ?? 0,
     });
   }, []);
+
+  const startListening = useCallback(() => {
+    if (listeningRef.current) return;
+    listeningRef.current = true;
+    window.addEventListener("devicemotion", handleMotion);
+  }, [handleMotion]);
 
   const requestPermission = useCallback(async () => {
     if (typeof window === "undefined") return;
@@ -41,7 +49,7 @@ export function useDeviceMotion(enabled: boolean): UseDeviceMotionReturn {
         const response = await DeviceMotionEventAny.requestPermission();
         if (response === "granted") {
           setPermissionState("granted");
-          window.addEventListener("devicemotion", handleMotion);
+          startListening();
         } else {
           setPermissionState("denied");
         }
@@ -51,9 +59,9 @@ export function useDeviceMotion(enabled: boolean): UseDeviceMotionReturn {
     } else {
       // Android or desktop — no permission needed
       setPermissionState("granted");
-      window.addEventListener("devicemotion", handleMotion);
+      startListening();
     }
-  }, [handleMotion]);
+  }, [startListening]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -66,27 +74,28 @@ export function useDeviceMotion(enabled: boolean): UseDeviceMotionReturn {
       return;
     }
 
-    // Check if permission API exists (iOS)
+    // Check if permission API exists (iOS 13+)
     const DeviceMotionEventAny = DeviceMotionEvent as unknown as {
       requestPermission?: () => Promise<string>;
     };
 
     if (typeof DeviceMotionEventAny.requestPermission !== "function") {
-      // Android: auto-grant and start listening
+      // Android or desktop: auto-grant
       setPermissionState("granted");
-      window.addEventListener("devicemotion", handleMotion);
+      startListening();
     }
-    // iOS: stays "unknown" until user taps
-  }, []);
+    // iOS: stays "unknown" until user taps the button
+  }, [startListening]);
 
+  // クリーンアップ
   useEffect(() => {
-    if (!enabled || permissionState !== "granted") return;
-
-    window.addEventListener("devicemotion", handleMotion);
     return () => {
-      window.removeEventListener("devicemotion", handleMotion);
+      if (listeningRef.current) {
+        window.removeEventListener("devicemotion", handleMotion);
+        listeningRef.current = false;
+      }
     };
-  }, [enabled, permissionState, handleMotion]);
+  }, [handleMotion]);
 
   return { acceleration, permissionState, requestPermission };
 }
